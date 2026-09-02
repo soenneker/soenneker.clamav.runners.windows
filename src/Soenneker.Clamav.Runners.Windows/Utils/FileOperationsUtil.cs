@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -43,7 +44,8 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         string extractDirectory = await _directoryUtil.CreateTempDirectory(cancellationToken);
         ZipFile.ExtractToDirectory(asset, extractDirectory);
 
-        string[] scanners = Directory.GetFiles(extractDirectory, "clamscan.exe", SearchOption.AllDirectories);
+        string[] files = await _fileUtil.GetAllFileNamesInDirectoryRecursively(extractDirectory, log: false, cancellationToken);
+        string[] scanners = files.Where(static file => Path.GetFileName(file).Equals("clamscan.exe", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (scanners.Length != 1)
             throw new FileNotFoundException("The ClamAV archive did not contain exactly one clamscan.exe executable.");
 
@@ -52,7 +54,7 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         if (!await _fileUtil.Exists(freshclamPath, cancellationToken))
             throw new FileNotFoundException("The ClamAV archive did not contain freshclam.exe.", freshclamPath);
 
-        RemoveDevelopmentFiles(stageDirectory);
+        await RemoveDevelopmentFiles(stageDirectory, cancellationToken);
 
         await _fileUtil.Write(Path.Combine(stageDirectory, "SOURCE.txt"),
             $"Official release archive from https://github.com/{Owner}/{Repository}/releases/latest{Environment.NewLine}Asset: {Path.GetFileName(asset)}{Environment.NewLine}",
@@ -62,19 +64,21 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         return stageDirectory;
     }
 
-    private static void RemoveDevelopmentFiles(string stageDirectory)
+    private async ValueTask RemoveDevelopmentFiles(string stageDirectory, CancellationToken cancellationToken)
     {
-        foreach (string pattern in new[] {"*.pdb", "*.lib"})
+        string[] files = await _fileUtil.GetAllFileNamesInDirectoryRecursively(stageDirectory, log: false, cancellationToken);
+
+        foreach (string file in files)
         {
-            foreach (string file in Directory.EnumerateFiles(stageDirectory, pattern, SearchOption.AllDirectories))
-                File.Delete(file);
+            string extension = Path.GetExtension(file);
+            if (extension.Equals(".pdb", StringComparison.OrdinalIgnoreCase) || extension.Equals(".lib", StringComparison.OrdinalIgnoreCase))
+                await _fileUtil.Delete(file, log: false, cancellationToken: cancellationToken);
         }
 
-        foreach (string name in new[] {"include", "UserManual"})
+        foreach (string name in new[] { "include", "UserManual" })
         {
             string directory = Path.Combine(stageDirectory, name);
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            await _directoryUtil.DeleteIfExists(directory, cancellationToken);
         }
     }
 }
