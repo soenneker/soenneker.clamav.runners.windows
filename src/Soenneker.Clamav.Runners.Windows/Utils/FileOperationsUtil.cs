@@ -73,6 +73,20 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         return stageDirectory;
     }
 
+    public async ValueTask PrepareFreshclamRuntime(string stageDirectory, CancellationToken cancellationToken = default)
+    {
+        string[] files = Directory.GetFiles(stageDirectory);
+
+        foreach (string file in files)
+        {
+            if (Path.GetExtension(file).Equals(".exe", StringComparison.OrdinalIgnoreCase) &&
+                !Path.GetFileName(file).Equals("freshclam.exe", StringComparison.OrdinalIgnoreCase))
+                await _fileUtil.Delete(file, log: false, cancellationToken: cancellationToken).NoSync();
+        }
+
+        _logger.LogInformation("Reduced Windows runtime to FreshClam and supporting files at {StageDirectory}", stageDirectory);
+    }
+
     private async ValueTask RemoveDevelopmentFiles(string stageDirectory, CancellationToken cancellationToken)
     {
         string[] files = await _fileUtil.GetAllFileNamesInDirectoryRecursively(stageDirectory, log: false, cancellationToken).NoSync();
