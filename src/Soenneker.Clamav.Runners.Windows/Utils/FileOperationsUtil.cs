@@ -43,6 +43,9 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         if (asset is null)
             throw new FileNotFoundException("Could not find the Windows x64 ZIP in the latest stable ClamAV release.");
 
+        string assetName = Path.GetFileName(asset);
+        string releaseTag = GetReleaseTag(assetName, ".win.x64.zip");
+
         string extractDirectory = await _directoryUtil.CreateTempDirectory(cancellationToken).NoSync();
         ZipFile.ExtractToDirectory(asset, extractDirectory);
 
@@ -59,7 +62,11 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         await RemoveDevelopmentFiles(stageDirectory, cancellationToken).NoSync();
 
         await _fileUtil.Write(Path.Combine(stageDirectory, "SOURCE.txt"),
-            $"Official release archive from https://github.com/{Owner}/{Repository}/releases/latest{Environment.NewLine}Asset: {Path.GetFileName(asset)}{Environment.NewLine}",
+            $"Upstream project: https://github.com/{Owner}/{Repository}{Environment.NewLine}" +
+            $"Release: https://github.com/{Owner}/{Repository}/releases/tag/{releaseTag}{Environment.NewLine}" +
+            $"Binary asset: {assetName}{Environment.NewLine}" +
+            $"Corresponding source: https://github.com/{Owner}/{Repository}/releases/download/{releaseTag}/{releaseTag}.tar.gz{Environment.NewLine}" +
+            $"License: GPL-2.0-only; see COPYING.txt and COPYING/ in this directory.{Environment.NewLine}",
             log: false, cancellationToken).NoSync();
 
         _logger.LogInformation("Prepared Windows x64 ClamAV runtime at {StageDirectory}", stageDirectory);
@@ -82,5 +89,13 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
             string directory = Path.Combine(stageDirectory, name);
             await _directoryUtil.DeleteIfExists(directory, cancellationToken).NoSync();
         }
+    }
+
+    private static string GetReleaseTag(string assetName, string suffix)
+    {
+        if (!assetName.StartsWith("clamav-", StringComparison.Ordinal) || !assetName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Could not determine the ClamAV release tag from asset '{assetName}'.");
+
+        return assetName[..^suffix.Length];
     }
 }
