@@ -16,6 +16,8 @@ namespace Soenneker.Clamav.Runners.Windows.Utils;
 
 public sealed class FileOperationsUtil : IFileOperationsUtil
 {
+    public string? Version { get; private set; }
+
 
     private const string Owner = "Cisco-Talos";
     private const string Repository = "clamav";
@@ -71,7 +73,7 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
             log: false, cancellationToken).NoSync();
 
         _logger.LogInformation("Prepared Windows x64 ClamAV runtime at {StageDirectory}", stageDirectory);
-        await File.WriteAllTextAsync(Path.Combine(stageDirectory, "VERSION.txt"), releaseTag, cancellationToken);
+        Version = releaseTag.Replace("clamav-", "");
         return stageDirectory;
     }
 
