@@ -5,6 +5,7 @@ namespace Soenneker.Clamav.Runners.Windows.Utils.Abstract;
 
 public interface IFileOperationsUtil
 {
+
     /// <summary>
     /// Downloads and extracts the latest stable official ClamAV Windows x64 distribution.
     /// </summary>
