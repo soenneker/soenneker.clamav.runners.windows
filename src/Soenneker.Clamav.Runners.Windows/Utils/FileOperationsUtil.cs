@@ -2,13 +2,16 @@ using System;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Soenneker.Clamav.Runners.Windows.Utils.Abstract;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
-using Soenneker.GitHub.Repositories.Releases.Abstract;
+using Soenneker.GitHub.Client.Http.Abstract;
+using Soenneker.GitHub.ClientUtil.Abstract;
+using Soenneker.GitHub.OpenApiClient.Models;
 using Soenneker.Utils.Directory.Abstract;
 using Soenneker.Utils.File.Abstract;
 
@@ -21,33 +24,44 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
 
     private const string Owner = "Cisco-Talos";
     private const string Repository = "clamav";
-    private static readonly string[] _assetPatterns = [".win.x64.zip"];
 
     private readonly ILogger<FileOperationsUtil> _logger;
     private readonly IDirectoryUtil _directoryUtil;
-    private readonly IGitHubRepositoriesReleasesUtil _releasesUtil;
+    private readonly IGitHubOpenApiClientUtil _gitHubClient;
+    private readonly IGitHubHttpClient _gitHubHttpClient;
     private readonly IFileUtil _fileUtil;
 
     public FileOperationsUtil(ILogger<FileOperationsUtil> logger, IDirectoryUtil directoryUtil,
-        IGitHubRepositoriesReleasesUtil releasesUtil, IFileUtil fileUtil)
+        IGitHubOpenApiClientUtil gitHubClient, IGitHubHttpClient gitHubHttpClient, IFileUtil fileUtil)
     {
         _logger = logger;
         _directoryUtil = directoryUtil;
-        _releasesUtil = releasesUtil;
+        _gitHubClient = gitHubClient;
+        _gitHubHttpClient = gitHubHttpClient;
         _fileUtil = fileUtil;
     }
 
     public async ValueTask<string> Process(CancellationToken cancellationToken = default)
     {
+        var client = await _gitHubClient.Get(cancellationToken).NoSync();
+        Release? release = await client.Repos[Owner][Repository].Releases.Latest.GetAsync(cancellationToken: cancellationToken).NoSync();
+        if (release?.TagName is not string releaseTag || !releaseTag.StartsWith("clamav-", StringComparison.Ordinal))
+            throw new InvalidDataException("The latest stable ClamAV release has no recognized release tag.");
+
+        string assetName = $"{releaseTag}.win.x64.zip";
+        ReleaseAsset? archive = release.Assets?.FirstOrDefault(asset => string.Equals(asset.Name, assetName, StringComparison.OrdinalIgnoreCase));
+        if (archive?.BrowserDownloadUrl is not string downloadUrl)
+            throw new FileNotFoundException($"Could not find '{assetName}' in the latest stable ClamAV release.");
+
         string downloadDirectory = await _directoryUtil.CreateTempDirectory(cancellationToken).NoSync();
-        string? asset = await _releasesUtil.DownloadReleaseAssetByNamePattern(Owner, Repository, downloadDirectory,
-            _assetPatterns, cancellationToken).NoSync();
-
-        if (asset is null)
-            throw new FileNotFoundException("Could not find the Windows x64 ZIP in the latest stable ClamAV release.");
-
-        string assetName = Path.GetFileName(asset);
-        string releaseTag = GetReleaseTag(assetName, ".win.x64.zip");
+        string asset = Path.Combine(downloadDirectory, "clamav.zip");
+        HttpClient httpClient = await _gitHubHttpClient.Get(cancellationToken).NoSync();
+        _logger.LogInformation("Downloading asset {AssetName} from {DownloadUrl}", assetName, downloadUrl);
+        using (Stream source = await httpClient.GetStreamAsync(downloadUrl, cancellationToken).NoSync())
+        await using (FileStream destination = File.Create(asset))
+        {
+            await source.CopyToAsync(destination, cancellationToken).NoSync();
+        }
 
         string extractDirectory = await _directoryUtil.CreateTempDirectory(cancellationToken).NoSync();
         ZipFile.ExtractToDirectory(asset, extractDirectory);
@@ -107,13 +121,5 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
             string directory = Path.Combine(stageDirectory, name);
             await _directoryUtil.DeleteIfExists(directory, cancellationToken).NoSync();
         }
-    }
-
-    private static string GetReleaseTag(string assetName, string suffix)
-    {
-        if (!assetName.StartsWith("clamav-", StringComparison.Ordinal) || !assetName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException($"Could not determine the ClamAV release tag from asset '{assetName}'.");
-
-        return assetName[..^suffix.Length];
     }
 }
